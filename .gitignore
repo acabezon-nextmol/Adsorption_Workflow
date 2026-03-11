@@ -1,0 +1,7 @@
+# Gromacs files
+*.itp
+*.gro
+*.top
+*.ndx
+*.pdb
+*.mdp
