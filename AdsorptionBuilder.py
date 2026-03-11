@@ -281,7 +281,7 @@ def build_system(surface, polymer_gro, polymer_mass, polymer_charge, x, y, water
     system = mda.Merge(surface.atoms, ordered_u.atoms) # Merge system
     system.dimensions = np.array([x, y, z_dim + z_surface + 2, 90.0, 90.0, 90.0])
     system.atoms.write("final_system.gro")
-    os.system("rm \#* tmp* mix*")
+    os.system("rm \#* tmp* mix* cofined_polymers.gro walls.gro")
     return system, polymer_number
 
 
