@@ -134,6 +134,41 @@ CG surface
     with open(file_name, "w+") as top:
         top.write(top_content)
 
+def write_system_top(
+        surface_itp : str, polymer_itp : str, n_polymer : int,
+        n_water : int, name_ions : str, n_ions : int,
+        file_name : str = "system.top"
+):
+    """Writes a .top file for the surface 
+
+    Parameters
+    ----------
+    surface_itp : str
+        _description_
+    file_name : str, optional
+        _description_, by default "surface.top"
+    """    
+    top_content=f"""#include "martini_v3.0.0.itp"
+#include "{surface_itp}"
+#include "{polymer_itp}"
+#include "martini_v3.0.0_solvents_v1.itp"
+#include "martini_v3.0.0_ions_v1.itp"
+
+
+[ system ]
+; name
+CG Adsorption
+
+[ molecules ]
+; name         number
+  CG_surface   1
+  CG_POL       {n_polymer}
+  W            {n_water}
+  {name_ions}           {n_ions}
+"""
+    with open(file_name, "w+") as top:
+        top.write(top_content)
+
 def build_system(surface, polymer_gro, polymer_mass, polymer_charge, x, y, water_gro, gmx_bin):
     # Create the mixture of solvent + polymer
     cmd = [
@@ -217,6 +252,7 @@ def build_system(surface, polymer_gro, polymer_mass, polymer_charge, x, y, water
     system.dimensions = np.array([x, y, z_dim + z_surface + 2, 90.0, 90.0, 90.0])
     system.atoms.write("final_system.gro")
     os.system("rm \#* tmp* mix*")
+    return system, polymer_number
 
 
 
@@ -287,7 +323,19 @@ def main():
     polymer_charge = np.sum(polymer.atoms.charges)
 
     # Call build
-    build_system(surface, polymer_gro, polymer_mass, polymer_charge, x, y, water_gro, gmx_bin)
+    system, n_polymers = build_system(surface, polymer_gro, polymer_mass, polymer_charge, x, y, water_gro, gmx_bin)
+    n_water = len(system.select_atoms("resname W"))
+    ions = system.select_atoms("resname ION")
+    n_ions = len(ions)
+    name_ions = ions.atoms.names[0]
+    write_system_top(
+        surface_itp = surface_top,
+        polymer_itp = polymer_top,
+        n_polymer = n_polymers,
+        n_water = n_water,
+        name_ions = name_ions,
+        n_ions = n_ions
+    )
 
     
 # =============================================================================
