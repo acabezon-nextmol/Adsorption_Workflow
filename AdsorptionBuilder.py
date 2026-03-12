@@ -26,6 +26,8 @@ import argparse
 import numpy as np
 import os
 import sys
+import time
+from datetime import timedelta
 
 # =============================================================================
 # Variables
@@ -157,6 +159,7 @@ def create_walls_gro(lx : float, ly : float, lz : float,
     u_walls.add_TopologyAttr("resid", np.arange(1, n_atoms + 1))
     u_walls.atoms.positions = np.array(positions)
     u_walls.dimensions = np.array([lx, ly, lz, 90.0, 90.0, 90.0])
+    u_walls.atoms.write("walls.gro")
     return u_walls
 
 def write_system_top(
@@ -196,6 +199,7 @@ CG Adsorption
 
 def build_system(surface, polymer_gro, polymer_mass, polymer_charge, x, y, water_gro, gmx_bin):
     # Create the mixture of solvent + polymer
+    # We start by first solvating the box to see how many waters fit in it.
     cmd = [
         gmx_bin, "solvate",
         "-cs", water_gro,
@@ -205,33 +209,56 @@ def build_system(surface, polymer_gro, polymer_mass, polymer_charge, x, y, water
     solvate = run_gmx(cmd)
     u = mda.Universe("tmp_1.gro")
     water_tot_mass = len(u.atoms) * w_mass
-    polymer_number = int(np.ceil(water_tot_mass * polymer_fraction / polymer_mass))
+    polymer_number = int(np.ceil(water_tot_mass * polymer_fraction / polymer_mass)) # Compute number of chains to be added
     polymer_tot_charge = polymer_number * polymer_charge
+
     u_walls = create_walls_gro(x, y, z_mix) # Create walls to prevent polymer leakage in Z
     water_walls = mda.Merge(u.atoms, u_walls.atoms) # Combine wall with water
     water_walls.dimensions = u.dimensions
     water_walls.atoms.write("tmp_1.gro")
+    start = time.time()
     cmd = [ 
         gmx_bin, "insert-molecules",
-        "-f", "tmp_1.gro",
+        "-f", "walls.gro",
         "-ci", polymer_gro,
-        "-nmol", str(polymer_number),
-        "-radius", "0.21",
-        "-replace", "W",
-        "-o", "tmp_2.gro"
+        "-nmol", str(25), #str(polymer_number),
+        # "-scale", "0.5",
+        # "-radius", "0.21",
+        # "-rot", "z",
+        # "-radius", "0.15",
+        # "-replace", "W",
+        "-o", "tmp_2.gro",
+        "-try", "1000"
     ]
     mixture = run_gmx(cmd)
-    u = mda.Universe("tmp_2.gro")
-    solvated_polymer = u.select_atoms("not resname WALL") # remove wall
+    pol_box = mda.Universe("tmp_2.gro")
+    pol_no_walls = pol_box.select_atoms("not resname WALL")
+    pol_no_walls.atoms.write("polymers.gro")
+    end = time.time()
+
+    cmd = [
+        gmx_bin, "solvate",
+        "-cp", "polymers.gro",
+        "-cs", water_gro,
+        "-radius", "0.21",
+        "-o", "tmp_3.gro"
+    ]
+
+    run_gmx(cmd)
+    print(str(timedelta(seconds=round(end-start))))
+    # sys.exit()
+    solvated_polymer = mda.Universe("tmp_3.gro")
+    # solvated_polymer = u.select_atoms("not resname WALL") # remove wall
+    # solvated_polymer.atoms.write("solvated_polymer.gro")
     # Create the solvent only buffer
     cmd = [
         gmx_bin, "solvate",
         "-cs", water_gro,
         "-box", str(x/10), str(y/10), str(z_sol/10) ,
-        "-o", "tmp_3.gro"
+        "-o", "tmp_4.gro"
     ]
     buffer = run_gmx(cmd)
-    u_buffer = mda.Universe("tmp_3.gro")
+    u_buffer = mda.Universe("tmp_4.gro")
 
     # Combine buffer and mixture and add counter ions
     buffer_max_z = np.max(u_buffer.atoms.positions[:, -1])
@@ -281,7 +308,8 @@ def build_system(surface, polymer_gro, polymer_mass, polymer_charge, x, y, water
     system = mda.Merge(surface.atoms, ordered_u.atoms) # Merge system
     system.dimensions = np.array([x, y, z_dim + z_surface + 2, 90.0, 90.0, 90.0])
     system.atoms.write("final_system.gro")
-    os.system("rm \#* tmp* mix* cofined_polymers.gro walls.gro")
+    # os.system("rm \#* tmp* mix* cofined_polymers.gro walls.gro")
+    os.system("rm \#*  mix* cofined_polymers.gro walls.gro")
     return system, polymer_number
 
 
