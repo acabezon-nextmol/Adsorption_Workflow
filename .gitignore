@@ -8,4 +8,4 @@
 *.tpr
 \#*
 # Jupyter notebooks
-.ipynb
+*.ipynb
