@@ -18,7 +18,7 @@ usage() {
 }
 
 # Check if the inputs were provided
-if [[ "$#" -ne 3 ]]; then
+if [[ "$#" -ne 4 ]]; then
 	usage
 fi
 
