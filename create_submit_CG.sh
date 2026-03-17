@@ -197,27 +197,34 @@ if [[ ! -f minimization.gro ]]; then
 fi
 
 if [[ -f minimization.gro ]]; then
-        tpr="relax"                                           
+        tpr="initial_equi"                                           
         \$GMX_BIN grompp -p \${WD}/system.top -c \${SIMDIR}/minimization.gro -f \${mdps}/\${tpr}.mdp -o \${tpr} -maxwarn 10 -n ../index.ndx
+        ${gmx_mdrun}
+fi
+
+
+if [[ -f initial_equi.gro ]]; then
+        tpr="relax"                                           
+        \$GMX_BIN grompp -p \${WD}/system.top initial_equi.gro -f \${mdps}/\${tpr}.mdp -o \${tpr} -maxwarn 10 -n ../index.ndx
         ${gmx_mdrun}
 fi
 
 if [[ -f relax.gro ]]; then
         tpr="compress-rest"                                                  
-        \$GMX_BIN grompp -p \${WD}/system.top -c relax.gro -t relax.cpt -f \${mdps}/\${tpr}.mdp -o \${tpr} -maxwarn 10  -n ../index.ndx
+        \$GMX_BIN grompp -p \${WD}/system.top -c relax.gro -f \${mdps}/\${tpr}.mdp -o \${tpr} -maxwarn 10  -n ../index.ndx
         ${gmx_mdrun}
 fi                                                                              
 
 if [[ -f compress-rest.gro ]]; then
         tpr="compress"                                                      
-        \$GMX_BIN grompp -p \${WD}/system.top -c compress-rest.gro -t compress-rest.cpt -f \${mdps}/\${tpr}.mdp -o \${tpr} -maxwarn 10  -n ../index.ndx
+        \$GMX_BIN grompp -p \${WD}/system.top -c compress-rest.gro -f \${mdps}/\${tpr}.mdp -o \${tpr} -maxwarn 10  -n ../index.ndx
         ${gmx_mdrun}
 fi
 
 
 if [[ -f compress.gro ]]; then                                                      
         tpr="npt"                                                      
-        \$GMX_BIN grompp -p \${WD}/system.top -c compress.gro -t compress.cpt -f \${mdps}/\${tpr}.mdp -o \${tpr} -maxwarn 10  -n ../index.ndx
+        \$GMX_BIN grompp -p \${WD}/system.top -c compress.gro -f \${mdps}/\${tpr}.mdp -o \${tpr} -maxwarn 10  -n ../index.ndx
         ${gmx_mdrun}
 fi
 
