@@ -307,6 +307,19 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	"""This function builds the system for simulation. The system contains the 
 	hair surface, polymer, water, and ions. The steps followed are listed below:
 
+		1. Calculate the composition of the system if not specified as input.
+		2. Add the polymer chains to the simulation box. A gird of atoms is added
+		on top and bottom to avoid polymers wrapping through the Z coordinate
+		3. Solvate polymer chains.
+		4. Create the water only buffer.
+		5. Combine buffer and solvated polymer. Add ions to neutralize the charge.
+		This step keeps the amount of ions needed to neutralize the surface and the polymer
+		which can lead to a mixture of NA and CL
+		6. Sort the different components so they follow the order: Polymer, Water, and Ions.
+		This is important for the topology generation.
+		7. Put everything together in the same .gro.
+
+
 	Parameters
 	----------
 	surface : mda.core.universe.Universe
@@ -573,10 +586,7 @@ def main():
 	system, topology_dict = build_system(surface, polymer_gro, polymer_mass,
 									polymer_charge, x, y, water_gro, gmx_bin,
 									  water_beads, aa_polymer_chains)
-	# n_water = len(system.select_atoms("resname W"))
-	# ions = system.select_atoms("resname ION")
-	# n_ions = len(ions)
-	# name_ions = ions.atoms.names[0]
+	
 	write_system_top(
 		surface_itp = surface_top,
 		polymer_itp = polymer_top,
