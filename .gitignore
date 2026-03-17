@@ -9,3 +9,5 @@
 \#*
 # Jupyter notebooks
 *.ipynb
+# Folders
+mdp_files/
