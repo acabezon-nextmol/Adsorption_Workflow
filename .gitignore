@@ -11,3 +11,8 @@
 *.ipynb
 # Folders
 mdp_files/
+SNAPSHOT/
+SOLVATED_POLYMER_TEST/
+SURFACE_WATER/
+# Python scrpt
+wrap_coordinates.py
