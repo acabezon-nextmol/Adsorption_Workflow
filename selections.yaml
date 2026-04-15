@@ -1,9 +1,11 @@
 # YAML for MDA selections
 System: all
 Surface: moltype CG_surface
+Bulk: moltype CG_POL or resname W ION
 Polymer: moltype CG_POL
 SOL: resname W ION
 MEA: resname MEA*
 POH: resname POH*
 SO3: resname SO3*
 Graphene: resname GRA*
+Non_Functionalized_Graphene: resname GRA1 GRA2 GRA3 GRA4
