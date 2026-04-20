@@ -16,5 +16,6 @@ SNAPSHOT/
 SOLVATED_POLYMER_TEST/
 SURFACE_WATER/
 NO_VACUUM/
+POLYMER_SIM/
 # Python scrpt
 wrap_coordinates.py
