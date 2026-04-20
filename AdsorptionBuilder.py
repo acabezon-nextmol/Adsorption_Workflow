@@ -258,7 +258,7 @@ def create_walls_gro(lx : float, ly : float, lz : float,
 	return u_walls
 
 def write_system_top(
-		surface_itp : str, polymer_itp : str, topology_dict : dict,
+		surface_itp : str, polymer_itp : str, topology_entries : list,
 		file_name : str = "system.top"
 ):
 	"""Writes the system.top file including the martini 3 FF and .ITP of the
@@ -270,15 +270,15 @@ def write_system_top(
 		.ITP of the surface
 	polymer_itp : str
 		.ITP of the polymer
-	topology_dict : dict
-		Dictionary containing the info for the molecules directive.
+	topology_dict : list
+		list containing the info for the molecules directive.
 	file_name : str, optional
 		Name of the output .TOP file, by default "system.top"
 	"""
 	# author = Alfonso Cabezón <alfonso.cabezon@nextmol.com>
 	# Created on (DD/MM/YYYY): 10/03/2026
 	lines = ""
-	for molecule, number in topology_dict.items():
+	for molecule, number in topology_entries:
 		line = f"  {molecule:<14}{number}\n"
 		lines += line
 	top_content=f"""#include "martini_v3.0.0.itp"
@@ -303,7 +303,7 @@ CG Adsorption
 
 def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polymer_mass : int,
 				  polymer_charge : int, x : float, y : float, water_gro : str,
-				    gmx_bin : str, W : int, P : int) -> Tuple[mda.core.universe.Universe, dict]:
+				    gmx_bin : str, W : int, P : int) -> Tuple[mda.core.universe.Universe, list]:
 	"""This function builds the system for simulation. The system contains the 
 	hair surface, polymer, water, and ions. The steps followed are listed below:
 
@@ -345,8 +345,8 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 
 	Returns
 	-------
-	mda.core.universe.Universe, dict
-		Universe of the final system generated, dict for the molecules directive of the topology
+	mda.core.universe.Universe, list
+		Universe of the final system generated, list for the molecules directive of the topology
 	"""	
 	# author = Alfonso Cabezón <alfonso.cabezon@nextmol.com>
 	# Created on (DD/MM/YYYY): 12/03/2026
@@ -474,22 +474,32 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	# Step 7: Mix all the compinents in one Universe
 	z_surface = surface.dimensions[2]
 	ordered_u.atoms.positions += np.array([0.0, 0.0, z_surface + 2]) # Displace mix and add safety buffer
+	surface_waters = len(surface.select_atoms("resname W"))
 
 	system = mda.Merge(surface.atoms, ordered_u.atoms) # Merge system
 	system.dimensions = np.array([x, y, z_dim + z_surface + 2, 90.0, 90.0, 90.0])
+
 	system.atoms.write("final_system.gro")
 
-	topology_dict = {
-		"CG_surface" : 1,
-		"CG_POL" : int(P),
-		"W" : len(waters)
-	}
+	if surface_waters > 0 :
+		topology_entries = [
+			("CG_surface", 1),
+			("W" , surface_waters),
+			("CG_POL", int(P)),
+			("W", len(waters)),
+		]
+	else:
+		topology_entries = [
+			("CG_surface", 1),
+			("CG_POL", int(P)),
+			("W", len(waters)),
+		]
 	if charged:
-		topology_dict[ion_name_surface] = len(ions_surface)
+		topology_entries.append((ion_name_surface, len(ions_surface)))
 		if charged_polymer:
-			topology_dict[ion_name_polymer] = len(ions_polymer)
+			topology_entries.append((ion_name_polymer, len(ions_polymer)))
 
-	return system, topology_dict
+	return system, topology_entries
 
 
 
@@ -583,14 +593,14 @@ def main():
 	polymer_charge = np.sum(polymer.atoms.charges)
 
 	# Call build
-	system, topology_dict = build_system(surface, polymer_gro, polymer_mass,
+	system, topology_entries = build_system(surface, polymer_gro, polymer_mass,
 									polymer_charge, x, y, water_gro, gmx_bin,
 									  water_beads, aa_polymer_chains)
 	
 	write_system_top(
 		surface_itp = surface_top,
 		polymer_itp = polymer_top,
-		topology_dict = topology_dict
+		topology_entries = topology_entries
 	)
 
 	
