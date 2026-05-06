@@ -26,10 +26,20 @@ import argparse
 import numpy as np
 import os
 import sys
-import time
-from datetime import timedelta
+import datetime
 from scipy.constants import Avogadro
-from typing import Tuple
+from typing import Tuple, List, Dict
+import logging
+
+# Initialize logger
+logging.basicConfig(
+	level=logging.INFO,
+	format="%(asctime)s [%(levelname)s] %(message)s",
+	handlers=[
+		logging.FileHandler("system_builder.log"),
+		logging.StreamHandler(sys.stdout)
+	]
+)
 
 # =============================================================================
 # Variables
@@ -60,18 +70,29 @@ def run_gmx(cmd : list) -> str:
 	Raises
 	------
 	RuntimeError
-		raises if the command retuens a code different from 0 (failed command)
+		raises if the command returns a code different from 0 (failed command)
 	""" 
 	# author = Alfonso Cabezón <alfonso.cabezon@nextmol.com>
 	# Created on (DD/MM/YYYY): 10/03/2026
-	print("Running: ", " ".join(cmd))
-	result = subprocess.run(
-		cmd, capture_output = True, text = True
-	)
-
+	cmd_str = " ".join(cmd)
+	logging.info(f"Executing: {cmd_str}")
+	
+	# Capture start time as a datetime object
+	start_time = datetime.datetime.now()
+	
+	# Execute the process
+	result = subprocess.run(cmd, capture_output=True, text=True)
+	
+	# Capture end time and calculate timedelta
+	end_time = datetime.datetime.now()
+	elapsed_time = end_time - start_time
+	
 	if result.returncode != 0:
-		print(result.stderr)
-		raise RuntimeError(f"GROMACS command failed: {' '.join(cmd)}")
+		logging.error(f"Command failed:\n{result.stderr}")
+		raise RuntimeError(f"GROMACS command failed: {cmd_str}")
+	
+	# timedelta automatically formats as HH:MM:SS.mmmmmm
+	logging.info(f"Completed in {elapsed_time}.")
 	
 	return result.stdout
 
@@ -239,10 +260,23 @@ def create_walls_gro(lx : float, ly : float, lz : float,
 	z_top = lz - 0.2
 	positions = []
 
-	for x in np.arange(0, lx, grid_spacing):
-		for y in np.arange(0, ly, grid_spacing):
-			positions.append([x, y, z_bottom])
-			positions.append([x, y, z_top])
+	# Modified 06/05/2026. Aim: Speed up coordinate generation using numpy
+	# Vectorized coordinate generation
+	x_coords = np.arange(0, lx, grid_spacing)
+	y_coords = np.arange(0, ly, grid_spacing)
+	xx, yy = np.meshgrid(x_coords, y_coords)
+	
+	x_flat = xx.flatten()
+	y_flat = yy.flatten()
+	
+	# Generate Z coordinates
+	z_bottom_arr = np.full_like(x_flat, z_bottom) # Array with same dimensions as x_flat with z_bottom value
+	z_top_arr = np.full_like(x_flat, z_top)
+	
+	# Combine and stack bottom and top arrays
+	bottom_wall = np.column_stack((x_flat, y_flat, z_bottom_arr)) # Put X,Y, and Z together
+	top_wall = np.column_stack((x_flat, y_flat, z_top_arr))
+	positions = np.vstack((bottom_wall, top_wall))
 
 	n_atoms = len(positions)
 	u_walls = mda.Universe.empty(n_atoms,
@@ -258,7 +292,7 @@ def create_walls_gro(lx : float, ly : float, lz : float,
 	return u_walls
 
 def write_system_top(
-		surface_itp : str, polymer_itp : str, topology_entries : list,
+		surface_itp : str, polymer_itp : str, topology_entries : List[Dict[str, str]],
 		file_name : str = "system.top"
 ):
 	"""Writes the system.top file including the martini 3 FF and .ITP of the
@@ -267,19 +301,19 @@ def write_system_top(
 	Parameters
 	----------
 	surface_itp : str
-		.ITP of the surface
+		.ITP file of the surface
 	polymer_itp : str
-		.ITP of the polymer
-	topology_dict : list
-		list containing the info for the molecules directive.
+		.ITP file of the polymer
+	topology_entries : List[Dict[str, str]]
+		List with name : count pairs for the molecules directive
 	file_name : str, optional
-		Name of the output .TOP file, by default "system.top"
-	"""
+		name for the topology .TOP file, by default "system.top"
+	"""	
 	# author = Alfonso Cabezón <alfonso.cabezon@nextmol.com>
 	# Created on (DD/MM/YYYY): 10/03/2026
 	lines = ""
-	for molecule, number in topology_entries:
-		line = f"  {molecule:<14}{number}\n"
+	for entry in topology_entries:
+		line = f"  {entry["name"]:<14}{entry["count"]}\n"
 		lines += line
 	top_content=f"""#include "martini_v3.0.0.itp"
 #include "{surface_itp}"
@@ -301,9 +335,96 @@ CG Adsorption
 		top.writelines(lines)
 		top.close()
 
+def modify_system_top(
+		system_top : str, polymer_itp : str, topology_entries : list,
+):
+	"""This function modifies an existing system topology file. It first parses the current
+	file to store the relevant information. Then adds new info from topology_entries
+	and writes a nre system topology.
+
+	Parameters
+	----------
+	system_top : str
+		The name of the current topology file
+	polymer_itp : str
+		The .itp file of the polymer
+	topology_entries : list
+		new topology entries for the file.
+	"""	
+	# author = Alfonso Cabezón <alfonso.cabezon@nextmol.com>
+	# Created on (DD/MM/YYYY): 28/04/2026
+	# =============================================================================
+	# Parse current topology
+	# =============================================================================
+	includes: List[str] = [ ]
+	molecules: List[Dict[str, str]] = [ ]
+	in_molecules: bool = False
+	with open(system_top, "r") as top:
+		# Loop over file lines
+		for line in top:
+			# Clean line
+			clean_line = line.strip()
+			# Skip empty lines
+			if not clean_line or clean_line.startswith(";"):
+				continue
+			# Store includes
+			if clean_line.startswith("#include"):
+				includes.append(line)
+				continue
+			# Detect section headers
+			if clean_line.startswith("[") and clean_line.endswith("]"):
+				# Normalize header line
+				header = clean_line.replace(" ", "")
+				if header == "[molecules]":
+					in_molecules = True
+				else:
+					in_molecules = False
+				continue
+			if in_molecules:
+				# Split name and number
+				info = clean_line.split()
+				if len(info) >= 2:
+					molecules.append({
+						"name" : info[0],
+						"count" : info[1]
+					})
+		top.close()
+	
+	# =============================================================================
+	# Modify current file
+	# =============================================================================
+	# update molecules
+	molecules += topology_entries
+	top_content=f"""#include "{polymer_itp}"
+#include "martini_v3.0.0_solvents_v1.itp"
+#include "martini_v3.0.0_ions_v1.itp"
+
+
+[ system ]
+; name
+CG Adsorption simulation system
+
+[ molecules ]
+; name         number
+"""
+	molecules_lines = [ ]
+	# print(molecules)
+	for molecule in molecules:
+		# print(molecule)
+		line = f"  {molecule["name"]:<14}{molecule["count"]}\n"
+		molecules_lines.append(line)
+	
+	with open(system_top, "w+") as top:
+		top.writelines(includes)
+		top.write(top_content)
+		top.writelines(molecules_lines)
+		top.close()
+
+
+
 def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polymer_mass : int,
 				  polymer_charge : int, x : float, y : float, water_gro : str,
-				    gmx_bin : str, W : int, P : int) -> Tuple[mda.core.universe.Universe, list]:
+					gmx_bin : str, W : int, P : int) -> Tuple[mda.core.universe.Universe, list]:
 	"""This function builds the system for simulation. The system contains the 
 	hair surface, polymer, water, and ions. The steps followed are listed below:
 
@@ -356,7 +477,9 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	if W is None or P is None:
 		W, P = determine_system_composition(x, y, z_mix, polymer_mass)
 	# Step 2: Add the polymer chains to the box
-	u_walls = create_walls_gro(x, y, z_mix) # Create walls to prevent polymer leakage in Z
+	# Modified 06/05/2026. Aim: Reduce workload. Grid spacing was too small generating a very dense grid
+	# This made the code slow in consecutive steps. 1 nm spacing is enough with -rot z
+	u_walls = create_walls_gro(x, y, z_mix, grid_spacing = 10.0) # Create walls to prevent polymer leakage in Z.
 	cmd = [ # Write gmx command
 		gmx_bin, "insert-molecules",
 		"-f", "walls.gro",
@@ -399,8 +522,8 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	# Step 5: Combine buffer and mixture and add counter ions
 	solvated_polymer = mda.Universe("tmp_3.gro") # Load solvated polymer
 	buffer_max_z = np.max(u_buffer.atoms.positions[:, -1]) # Get top Z pisition
-	solvated_polymer.atoms.positions += np.array([0.0, 0.0, buffer_max_z + 2]) # displace mixture with a safety buffer
-	z_dim = buffer_max_z + solvated_polymer.dimensions[2] + 2# Box dim in Z for merged universe
+	solvated_polymer.atoms.positions += np.array([0.0, 0.0, buffer_max_z + 0.2]) # displace mixture with a safety buffer
+	z_dim = buffer_max_z + solvated_polymer.dimensions[2] + 0.2 # Box dim in Z for merged universe
 	buffer_mix = mda.Merge(u_buffer.atoms, solvated_polymer.atoms) # Merge system
 	buffer_mix.dimensions = np.array([x, y, z_dim, 90.0, 90.0, 90.0])
 	
@@ -473,31 +596,33 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 
 	# Step 7: Mix all the compinents in one Universe
 	z_surface = surface.dimensions[2]
-	ordered_u.atoms.positions += np.array([0.0, 0.0, z_surface + 2]) # Displace mix and add safety buffer
+	ordered_u.atoms.positions += np.array([0.0, 0.0, z_surface + 0.2]) # Displace mix and add safety buffer
 	surface_waters = len(surface.select_atoms("resname W"))
 
 	system = mda.Merge(surface.atoms, ordered_u.atoms) # Merge system
-	system.dimensions = np.array([x, y, z_dim + z_surface + 2, 90.0, 90.0, 90.0])
+	system.dimensions = np.array([x, y, z_dim + z_surface + 0.2, 90.0, 90.0, 90.0])
 
 	system.atoms.write("final_system.gro")
 
 	if surface_waters > 0 :
 		topology_entries = [
-			("CG_surface", 1),
-			("W" , surface_waters),
-			("CG_POL", int(P)),
-			("W", len(waters)),
+			{"name" : "CG_surface", "count" : 1},
+			{"name" : "W", "count" : surface_waters},
+			{"name" : "CG_POL", "count" : int(P)},
+			{"name" : "W", "count" : len(waters)},
 		]
 	else:
 		topology_entries = [
-			("CG_surface", 1),
-			("CG_POL", int(P)),
-			("W", len(waters)),
+			{"name" : "CG_surface", "count" : 1},
+			{"name" : "CG_POL", "count" : int(P)},
+			{"name" : "W", "count" : len(waters)},
 		]
 	if charged:
-		topology_entries.append((ion_name_surface, len(ions_surface)))
+		topology_entries.append({"name" : ion_name_surface, "count" : len(ions_surface)})
 		if charged_polymer:
-			topology_entries.append((ion_name_polymer, len(ions_polymer)))
+			topology_entries.append({ "name" : ion_name_polymer, "count" : len(ions_polymer)})
+	print(topology_entries)
+	print("\n")
 
 	return system, topology_entries
 
@@ -516,6 +641,10 @@ def main():
 						action = "store", type = str, 
 						metavar = f"{"<str>":<10}{".ITP/.TOP":>15}",
 						help = "The topology file of the surface.")
+	parser.add_argument("-s_tpr", "--surface_tpr", dest = "surface_tpr",
+						action = "store", type = str,
+						metavar = f"{"<str>":<10}{".TPR":>15}",
+						help = ".TPR file of the surface")
 	parser.add_argument("-p_gro", "--polymer_gro", dest = "polymer_gro", required = True,
 						action = "store", type = str,
 						metavar = f"{"<str>":<10}{".GRO/.PDB":>15}",
@@ -528,6 +657,10 @@ def main():
 						action = "store", type = str,
 						metavar = f"{"<str>":<10}{".GRO/.PDB":>15}",
 						help = "Coordinate file of preequilibrated water box.")
+	parser.add_argument("-top", "--top", dest = "topology",
+						action = "store", type = str, default = "system.top",
+						metavar = f"{"<str>":<10}{".TOP file":>15}",
+						help = "Current topology file for the surface")
 	parser.add_argument("-gmx_bin", "--gmx_bin", dest = "gmx_bin", required = False,
 						action = "store", type = str, 
 						metavar = f"{"<str>":<10}{"PATH":>15}",
@@ -555,6 +688,7 @@ def main():
 	polymer_top = args.polymer_top
 	water_gro = args.water_gro
 	gmx_bin = args.gmx_bin
+	system_top = args.topology
 
 	if args.aa_polymer is not None and args.aa_water is not None:
 		aa_polymer_chains = args.aa_polymer
@@ -581,8 +715,10 @@ def main():
 			"-o", "surface"
 		]
 		run_gmx(cmd)
-	# Read surface and get simensions
-	surface = mda.Universe("surface.tpr", surface_gro)
+		# Read surface and get simensions
+		surface = mda.Universe("surface.tpr", surface_gro)
+	else:
+		surface = mda.Universe(args.surface_tpr, surface_gro)
 	# surface = mda.Universe(surface_top, surface_gro, topology_format = "ITP")
 	dimensions = surface.dimensions
 	x, y = dimensions[0], dimensions[1]
@@ -596,12 +732,21 @@ def main():
 	system, topology_entries = build_system(surface, polymer_gro, polymer_mass,
 									polymer_charge, x, y, water_gro, gmx_bin,
 									  water_beads, aa_polymer_chains)
+	print(topology_entries)
+	print("\n")
 	
-	write_system_top(
-		surface_itp = surface_top,
-		polymer_itp = polymer_top,
-		topology_entries = topology_entries
-	)
+	if system_top is None:
+		write_system_top(
+			surface_itp = surface_top,
+			polymer_itp = polymer_top,
+			topology_entries = topology_entries
+		)
+	else:
+		modify_system_top(
+			system_top,
+			polymer_top,
+			topology_entries[1:]
+		)
 
 	
 # =============================================================================
