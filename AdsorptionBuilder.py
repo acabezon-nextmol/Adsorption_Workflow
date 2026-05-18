@@ -25,6 +25,7 @@ import subprocess
 import argparse
 import numpy as np
 import os
+import glob
 import sys
 import datetime
 from scipy.constants import Avogadro
@@ -396,7 +397,6 @@ def modify_system_top(
 	# update molecules
 	molecules += topology_entries
 	top_content=f"""#include "{polymer_itp}"
-#include "martini_v3.0.0_solvents_v1.itp"
 #include "martini_v3.0.0_ions_v1.itp"
 
 
@@ -608,26 +608,15 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	system.dimensions = np.array([x, y, z_dim + z_surface + 0.2, 90.0, 90.0, 90.0])
 
 	system.atoms.write("final_system.gro")
-
-	if surface_waters > 0 :
-		topology_entries = [
-			{"name" : "CG_surface", "count" : 1},
-			{"name" : "W", "count" : surface_waters},
-			{"name" : "CG_POL", "count" : int(P)},
-			{"name" : "W", "count" : len(waters)},
-		]
-	else:
-		topology_entries = [
-			{"name" : "CG_surface", "count" : 1},
-			{"name" : "CG_POL", "count" : int(P)},
-			{"name" : "W", "count" : len(waters)},
-		]
+	topology_entries = [
+		{"name" : "CG_surface", "count" : 1},
+		{"name" : "CG_POL", "count" : int(P)},
+		{"name" : "W", "count" : len(waters)},
+	]
 	if charged:
 		topology_entries.append({"name" : ion_name_surface, "count" : len(ions_surface)})
 		if charged_polymer:
 			topology_entries.append({ "name" : ion_name_polymer, "count" : len(ions_polymer)})
-	print(topology_entries)
-	print("\n")
 
 	return system, topology_entries
 
@@ -759,5 +748,7 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
 	main()
-	os.remove("tmp*gro")
+	for f in glob.glob("tmp*gro"):
+		os.remove(f)
 	os.remove("walls.gro")
+	os.remove("polymers.gro")
