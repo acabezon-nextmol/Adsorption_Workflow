@@ -1,0 +1,15 @@
+FILES:
+  tpr: "npt4.tpr"
+  gro: "npt4.gro"
+  out: "relocated_npt4.gro"
+
+SETTINGS:
+  box_increment: 10
+
+GRAPHENE:
+  graf: "moltype CG_surface"
+
+SOLVENT:
+  polymer: "moltype CG_POL"
+  water: "resname W"
+  ions: "resname ION"
