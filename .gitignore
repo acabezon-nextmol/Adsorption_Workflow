@@ -11,6 +11,7 @@
 # Jupyter notebooks
 *.ipynb
 # Folders
+LIPID_PARAMETERS/
 mdp_files/
 SNAPSHOT/
 SOLVATED_POLYMER_TEST/
