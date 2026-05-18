@@ -496,11 +496,11 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 
 	# Step 3: Solvate polymer chains
 	cmd = [
-		gmx_bin, "insert-molecules",
-		"-f", "polymers.gro",
-		"-ci", water_gro,
+		gmx_bin, "solvate",
+		"-cp", "polymers.gro",
+		"-cs", water_gro,
+		"-maxsol", str(W),
 		"-radius", "0.21",
-		"-nmol", str(W),
 		"-o", "tmp_3.gro"
 	]
 
@@ -509,18 +509,23 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	# Step 4: Create the solvent only buffer
 	n_waters = calculate_water_beads(x, y, z_sol)
 	cmd = [
-		gmx_bin, "insert-molecules",
-		"-ci", water_gro,
+		gmx_bin, "solvate",
+		"-cs", water_gro,
 		"-box", str(x/10), str(y/10), str(z_sol/10) ,
 		"-radius", "0.21",
-		"-nmol", str(n_waters),
 		"-o", "tmp_4.gro"
 	]
 	buffer = run_gmx(cmd)
 	u_buffer = mda.Universe("tmp_4.gro")
-
+	# Remove W outside in Z
+	dimensions = u_buffer.dimensions[:3]
+	u_buffer = u_buffer.select_atoms(f"(prop z > 0) and (prop z < {dimensions[-1]})")
 	# Step 5: Combine buffer and mixture and add counter ions
 	solvated_polymer = mda.Universe("tmp_3.gro") # Load solvated polymer
+	# Remove W beads outside the box in Z
+	dimensions = solvated_polymer.dimensions[:3]
+	solvated_polymer = solvated_polymer.select_atoms(f"(prop z > 0) and (prop z < {dimensions[-1]})")
+	# Merge buffer and polymer slab
 	buffer_max_z = np.max(u_buffer.atoms.positions[:, -1]) # Get top Z pisition
 	solvated_polymer.atoms.positions += np.array([0.0, 0.0, buffer_max_z + 0.2]) # displace mixture with a safety buffer
 	z_dim = buffer_max_z + solvated_polymer.dimensions[2] + 0.2 # Box dim in Z for merged universe
@@ -591,7 +596,7 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	else:
 		ordered_u = mda.Merge(polymers, waters)
 	ordered_u.dimensions = np.array([x, y, z_dim, 90.0, 90.0, 90.0])
-	ordered_u.atoms.write("tmp_4.gro")
+	ordered_u.atoms.write("tmp_5.gro")
 
 
 	# Step 7: Mix all the compinents in one Universe
