@@ -20,6 +20,11 @@ import argparse
 import yaml
 import MDAnalysis as mda
 from typing import Dict, Any
+from pathlib import Path
+import logging
+
+# Configure logging
+logging.basicConfig(level = logging.INFO, format = "%(levelname)s: %(message)s")
 
 def create_combined_group(
     universe: mda.Universe, 
@@ -50,6 +55,10 @@ def process_system(config_path: str) -> None:
         config_path (str): Path to the YAML configuration file.
     """
     # 1. Load and validate the YAML configuration
+    config_file = Path(config_path)
+    if not config_file.exists():
+        raise FileNotFoundError(f"Configuration file {config_path} not found")
+    
     with open(config_path, "r") as file:
         config: Dict[str, Any] = yaml.safe_load(file)
 
@@ -61,45 +70,73 @@ def process_system(config_path: str) -> None:
         raise KeyError(f"Missing required file path in configuration: {e}")
 
     box_increment = config.get("SETTINGS", {}).get("box_increment", 30)
-    z_buffer = box_increment / 2
+    z_buffer = box_increment / 2.0
+    target_z_bottom = 1.5
 
     # 2. Initialize Universe
+    logging.info(f"Loading Universe from {tpr} and {gro}.")
     u = mda.Universe(tpr, gro)
     dimensions = u.dimensions
     z_height = dimensions[2]
     all_atoms = u.atoms
 
     # 3. Build AtomGroups dynamically
+    logging.info("Building AtomgGroups from selections.")
     graphene_ag = create_combined_group(u, config.get("GRAPHENE", {}))
-    solvent_ag = create_combined_group(u, config.get("SOLVENT", {}))
-
-    if len(graphene_ag) == 0 or len(solvent_ag) == 0:
+    solv_dict = config.get("SOLVENT", {})
+    polymer_sel = solv_dict.get("polymer", "")
+    # Isolate W and ION
+    water_ion_dict = { k : v for k,v in solv_dict.items() if k != "polymer"}
+    polymer_ag = u.select_atoms(polymer_sel)
+    solvent_ag = create_combined_group(u, water_ion_dict)
+    # Sanity check
+    if len(graphene_ag) == 0 or len(solvent_ag) == 0 or len(polymer_ag) == 0:
         raise ValueError("One of the atom groups has 0 atoms.")
-
+    
     # 4. Apply Geometric Transformations
+    # unwrap fragments in polymer selection
+    logging.info("Unwrapping broken polymer chains.")
+    polymer_ag.unwrap(compound = "fragments", reference = "cog")
+    # NOTE: Water and IONS are single beads that do not need unwrapping
+    
     # Shift by Z/2 to assemble split components
     all_atoms.translate([0.0, 0.0, z_height / 2.0])
 
-    # Wrap to centralize
+    # Wrap to centralize graphene
     graphene_ag.wrap()
-    solvent_ag.wrap(compound="fragments", center = "cog")
+    # Position graphene at the bottom
+    current_graphene_min = graphene_ag.positions[:, 2].min()
+    z_shift_to_bottom = target_z_bottom - current_graphene_min
 
-    # Shift system to target Z buffer
-    shift_z = graphene_ag.positions[:, 2].min() - 1.5 # Ensure grahene is 1.5 angstrom above 0
-    all_atoms.translate([0.0, 0.0, -shift_z])
+    logging.info("Shifting system to locate graphene at the bottom")
+    all_atoms.translate([0.0, 0.0, z_shift_to_bottom])
 
-    # Final fragment wrap for solvent safety
-    solvent_ag.wrap(compound="fragments", center = "cog")
+    # 5. Deterministic solvent wrapping
+    wi_positions = solvent_ag.positions
+    # Mask beads below target Z
+    below_graphene_mask = wi_positions[:, 2] < target_z_bottom
+    # Add a full box height to the masked beads
+    wi_positions[below_graphene_mask, 2] += z_height
+    solvent_ag.positions = wi_positions
+    logging.info(f"Relocated {below_graphene_mask.sum()} water/ion beads.")
 
-    # Expand box dimensions for vacuum
+    # 6. Relocate polymer chains
+    logging.info("Relocating polymer chains.")
+    for frag in polymer_ag.fragments:
+        if frag.center_of_geometry()[2] < target_z_bottom:
+            frag.translate([0.0, 0.0, z_height])
+
+    # 7. Expand box dimensions and centralize
+    logging.info("Adding buffer in Z to use walls.")
     u.dimensions[2] += box_increment
     # relocate system
-    all_atoms.translate([0, 0, z_buffer])
+    all_atoms.translate([0, 0, z_buffer - target_z_bottom])
+    max_Z_coordinate = all_atoms.positions[:, 2].max()
+    u.dimensions[2] = max_Z_coordinate + (box_increment / 2)
 
     # 5. Write output
+    logging.info(f"Writing output to {out}")
     u.atoms.write(out)
-        
-    print(f"Successfully processed and saved to {out}")
 
 def main():
     parser = argparse.ArgumentParser(description = desc, usage = usage)
