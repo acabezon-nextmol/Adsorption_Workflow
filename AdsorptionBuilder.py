@@ -578,6 +578,8 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 		W, P = determine_system_composition(x, y, z_mix, polymer_mass)
 	# Step 2: Add the polymer chains to the box
 	# Modified 29/05/2026. Aim: Speed up polymer insertion. Wall creation no longer needed.
+	logging.info(f"Inserting {P} polymer chains")
+	start_time = datetime.datetime.now()
 
 	polymers = generate_polymer_layer(
 		polymer_gro = polymer_gro,
@@ -588,6 +590,9 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 		z_spacing = 0.3
 	)
 	polymers.atoms.write("polymers.gro")
+	end_time = datetime.datetime.now()
+	elapsed_time = end_time - start_time
+	logging.info(f"Polymer insertion completed in: {elapsed_time}.")
 
 	# Step 3: Solvate polymer chains
 	cmd = [
