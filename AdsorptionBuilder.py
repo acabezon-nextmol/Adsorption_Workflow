@@ -292,6 +292,107 @@ def create_walls_gro(lx : float, ly : float, lz : float,
 	u_walls.atoms.write(file_name)
 	return u_walls
 
+def generate_polymer_layer(polymer_gro: str, num_chains: int, 
+                           lx: float, ly: float, z_start: float, 
+                           z_spacing: float = 2.0) -> mda.core.universe.Universe:
+    """
+    Rapidly builds a randomly distributed polymer layer by stacking flat polymers 
+    along the Z-axis, applying random XY translations and Z-rotations.
+    
+    This completely bypasses the need for GROMACS 'insert-molecules' and walls, 
+    guaranteeing no overlaps via deterministic Z-separation.
+
+    Parameters
+    ----------
+    polymer_gro : str
+        Path to the reference polymer .gro file.
+    num_chains : int
+        Number of polymer chains to insert (P).
+    lx : float
+        Box dimension in X (Angstroms).
+    ly : float
+        Box dimension in Y (Angstroms).
+    z_start : float
+        Starting Z-coordinate for the polymer stack.
+    z_spacing : float, optional
+        Minimum separation distance in Z between chains to prevent clashes. 
+
+    Returns
+    -------
+    mda.core.universe.Universe
+        A newly created Universe containing the full polymer stack.
+    """
+	# author = Alfonso Cabezón <alfonso.cabezon@nextmol.com>
+	# Created on (DD/MM/YYYY): 29/05/2026
+    # 1. Load the reference polymer
+    u_ref = mda.Universe(polymer_gro)
+    n_atoms = len(u_ref.atoms)
+    n_res = len(u_ref.residues)
+    
+    # 2. Pre-allocate arrays for O(1) memory assignment speed
+    tot_atoms = n_atoms * num_chains
+    tot_res = n_res * num_chains
+    
+    # Calculate offset per chain to preserve correct residue indexing
+    res_offsets = np.repeat(np.arange(num_chains) * n_res, n_atoms)
+    new_resindices = np.tile(u_ref.atoms.resindices, num_chains) + res_offsets
+    
+    # Initialize empty universe capable of holding all chains
+    u_new = mda.Universe.empty(
+        tot_atoms,
+        n_residues=tot_res,
+        atom_resindex=new_resindices,
+        trajectory=True
+    )
+    
+    # 3. Inherit topology attributes
+    u_new.add_TopologyAttr("name", list(u_ref.atoms.names) * num_chains)
+    u_new.add_TopologyAttr("resname", list(u_ref.residues.resnames) * num_chains)
+    u_new.add_TopologyAttr("resid", np.arange(1, tot_res + 1))
+    
+    # 4. Normalize reference coordinates (Center XY at origin, bottom Z to 0)
+    ref_coords = u_ref.atoms.positions.copy()
+    com = u_ref.atoms.center_of_mass()
+    ref_coords[:, 0] -= com[0]
+    ref_coords[:, 1] -= com[1]
+    ref_coords[:, 2] -= ref_coords[:, 2].min()
+    
+    # Calculate the actual Z-thickness of a single polymer unit
+    z_thickness = ref_coords[:, 2].max() + z_spacing
+    new_positions = np.empty((tot_atoms, 3))
+    
+    # 5. Populate coordinates vectorially
+    for i in range(num_chains):
+        # Generate random angle and construct Z-rotation matrix
+        theta = np.random.uniform(0, 2 * np.pi)
+        c, s = np.cos(theta), np.sin(theta)
+        rot_z = np.array([
+            [c, -s, 0], 
+            [s,  c, 0], 
+            [0,  0, 1]
+        ])
+        
+        # Apply rotation
+        rotated_coords = np.dot(ref_coords, rot_z.T)
+        
+        # Apply random XY translation and systematic Z stacking
+        dx = np.random.uniform(0, lx)
+        dy = np.random.uniform(0, ly)
+        dz = z_start + (i * z_thickness)
+        
+        rotated_coords += np.array([dx, dy, dz])
+        
+        # Map to the pre-allocated overall array
+        start_idx = i * n_atoms
+        end_idx = start_idx + n_atoms
+        new_positions[start_idx:end_idx] = rotated_coords
+
+    # 6. Assign positions and new dimensions
+    u_new.atoms.positions = new_positions
+    u_new.dimensions = np.array([lx, ly, z_start + (num_chains * z_thickness), 90.0, 90.0, 90.0])
+    
+    return u_new
+
 def write_system_top(
 		surface_itp : str, polymer_itp : str, topology_entries : List[Dict[str, str]],
 		file_name : str = "system.top"
@@ -471,28 +572,22 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	"""	
 	# author = Alfonso Cabezón <alfonso.cabezon@nextmol.com>
 	# Created on (DD/MM/YYYY): 12/03/2026
-	# Adapted on (DD/MM/YYYY): 16/03/2026 by Alfonso Cabezón <alfonso.cabezon@nextmol.com>
-	# TODO: Document and clean
+	# Adapted on (DD/MM/YYYY): 29/05/2026 by Alfonso Cabezón <alfonso.cabezon@nextmol.com>
 	# Step 1: Calculate the composition of the system if not specified
 	if W is None or P is None:
 		W, P = determine_system_composition(x, y, z_mix, polymer_mass)
 	# Step 2: Add the polymer chains to the box
-	# Modified 06/05/2026. Aim: Reduce workload. Grid spacing was too small generating a very dense grid
-	# This made the code slow in consecutive steps. 1 nm spacing is enough with -rot z
-	u_walls = create_walls_gro(x, y, z_mix, grid_spacing = 10.0) # Create walls to prevent polymer leakage in Z.
-	cmd = [ # Write gmx command
-		gmx_bin, "insert-molecules",
-		"-f", "walls.gro",
-		"-ci", polymer_gro,
-		"-nmol", str(P), 
-		"-rot", "z",
-		"-o", "tmp_2.gro",
-		"-try", "20000"
-	]
-	mixture = run_gmx(cmd) # run gmx command
-	pol_box = mda.Universe("tmp_2.gro") # Read generated .gro
-	pol_no_walls = pol_box.select_atoms("not resname WALL") # Eliminate Walls
-	pol_no_walls.atoms.write("polymers.gro") # Write polymer only .gro
+	# Modified 29/05/2026. Aim: Speed up polymer insertion. Wall creation no longer needed.
+
+	polymers = generate_polymer_layer(
+		polymer_gro = polymer_gro,
+		num_chains = int(P),
+		lx = x,
+		ly = y,
+		z_start = 0.5,
+		z_spacing = 0.3
+	)
+	polymers.atoms.write("polymers.gro")
 
 	# Step 3: Solvate polymer chains
 	cmd = [
