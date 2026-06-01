@@ -294,7 +294,7 @@ def create_walls_gro(lx : float, ly : float, lz : float,
 
 def generate_polymer_layer(polymer_gro: str, num_chains: int, 
                            lx: float, ly: float, z_start: float, 
-                           z_spacing: float = 2.0) -> mda.core.universe.Universe:
+                           z_spacing: float = 2.0) -> mda.Universe:
     """
     Rapidly builds a randomly distributed polymer layer by stacking flat polymers 
     along the Z-axis, applying random XY translations and Z-rotations.
@@ -319,11 +319,9 @@ def generate_polymer_layer(polymer_gro: str, num_chains: int,
 
     Returns
     -------
-    mda.core.universe.Universe
+    mda.Universe
         A newly created Universe containing the full polymer stack.
     """
-	# author = Alfonso Cabezón <alfonso.cabezon@nextmol.com>
-	# Created on (DD/MM/YYYY): 29/05/2026
     # 1. Load the reference polymer
     u_ref = mda.Universe(polymer_gro)
     n_atoms = len(u_ref.atoms)
@@ -572,27 +570,31 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	"""	
 	# author = Alfonso Cabezón <alfonso.cabezon@nextmol.com>
 	# Created on (DD/MM/YYYY): 12/03/2026
-	# Adapted on (DD/MM/YYYY): 29/05/2026 by Alfonso Cabezón <alfonso.cabezon@nextmol.com>
+	# Adapted on (DD/MM/YYYY): 16/03/2026 by Alfonso Cabezón <alfonso.cabezon@nextmol.com>
+	# TODO: Document and clean
 	# Step 1: Calculate the composition of the system if not specified
 	if W is None or P is None:
 		W, P = determine_system_composition(x, y, z_mix, polymer_mass)
-	# Step 2: Add the polymer chains to the box
-	# Modified 29/05/2026. Aim: Speed up polymer insertion. Wall creation no longer needed.
-	logging.info(f"Inserting {P} polymer chains")
-	start_time = datetime.datetime.now()
+
+	start = datetime.datetime.now()
+	logging.info(f"Inserting {P} polymer chains in {x:<.2f}x{y:<.2f}x{z_mix:<.2f} box")
 
 	polymers = generate_polymer_layer(
 		polymer_gro = polymer_gro,
 		num_chains = int(P),
 		lx = x,
 		ly = y,
-		z_start = 0.5,
-		z_spacing = 0.3
+		z_start = 1.0,
+		z_spacing = 5.0
 	)
 	polymers.atoms.write("polymers.gro")
-	end_time = datetime.datetime.now()
-	elapsed_time = end_time - start_time
-	logging.info(f"Polymer insertion completed in: {elapsed_time}.")
+	end = datetime.datetime.now()
+	elapsed_time = end - start
+	logging.info(f"polymers.gro generated in: {elapsed_time}")
+	# sys.exit()
+	# pol_box = mda.Universe("tmp_2.gro") # Read generated .gro
+	# pol_no_walls = pol_box.select_atoms("not resname WALL") # Eliminate Walls
+	# pol_no_walls.atoms.write("polymers.gro") # Write polymer only .gro
 
 	# Step 3: Solvate polymer chains
 	cmd = [
