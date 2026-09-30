@@ -29,6 +29,8 @@ import glob
 import sys
 import datetime
 from scipy.constants import Avogadro
+from polymer_insertion import insert_polymer, generate_polymer_layer_zshift
+from polymer_insertion_2 import insert_polymer_2
 from typing import Tuple, List, Dict
 import logging
 
@@ -576,25 +578,32 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	if W is None or P is None:
 		W, P = determine_system_composition(x, y, z_mix, polymer_mass)
 
+	cmd = [
+		gmx_bin, "editconf",
+		"-bt", "cubic",
+		"-box",  str(x/10), str(y/10), str(z_mix/10),
+		"-o", "empty_box.gro"
+	]
+	empty_box = run_gmx(cmd)
+
+	cmd = [ # Write gmx command                                             
+			gmx_bin, "insert-molecules",                                    
+			"-f", "empty_box.gro",                                              
+			"-ci", polymer_gro,                                             
+			"-nmol", str(P),                                                
+			"-rot", "z",                                                    
+			"-o", "tmp_2.gro",                                              
+			"-try", "20000000",
+			"-radius", "0.15"                                            
+	]
+
 	start = datetime.datetime.now()
 	logging.info(f"Inserting {P} polymer chains in {x:<.2f}x{y:<.2f}x{z_mix:<.2f} box")
+	polymer = run_gmx(cmd) 
 
-	polymers = generate_polymer_layer(
-		polymer_gro = polymer_gro,
-		num_chains = int(P),
-		lx = x,
-		ly = y,
-		z_start = 1.0,
-		z_spacing = 5.0
-	)
-	polymers.atoms.write("polymers.gro")
 	end = datetime.datetime.now()
 	elapsed_time = end - start
 	logging.info(f"polymers.gro generated in: {elapsed_time}")
-	# sys.exit()
-	# pol_box = mda.Universe("tmp_2.gro") # Read generated .gro
-	# pol_no_walls = pol_box.select_atoms("not resname WALL") # Eliminate Walls
-	# pol_no_walls.atoms.write("polymers.gro") # Write polymer only .gro
 
 	# Step 3: Solvate polymer chains
 	cmd = [
@@ -619,14 +628,18 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	]
 	buffer = run_gmx(cmd)
 	u_buffer = mda.Universe("tmp_4.gro")
+
 	# Remove W outside in Z
 	dimensions = u_buffer.dimensions[:3]
 	u_buffer = u_buffer.select_atoms(f"(prop z > 0) and (prop z < {dimensions[-1]})")
 	# Step 5: Combine buffer and mixture and add counter ions
 	solvated_polymer = mda.Universe("tmp_3.gro") # Load solvated polymer
 	# Remove W beads outside the box in Z
-	dimensions = solvated_polymer.dimensions[:3]
-	solvated_polymer = solvated_polymer.select_atoms(f"(prop z > 0) and (prop z < {dimensions[-1]})")
+	dimensions = solvated_polymer.dimensions
+	max_z = np.max(solvated_polymer.atoms.positions[:, 2]) + 4 # Adds 4 Angstrom
+	new_dimension = dimensions + [ 0.0, 0.0, max_z, 90.0, 90.0, 90.0 ]
+	solvated_polymer.dimensions = new_dimension
+	# solvated_polymer = solvated_polymer.select_atoms(f"(prop z > 0) and (prop z < {dimensions[-1]})")
 	# Merge buffer and polymer slab
 	buffer_max_z = np.max(u_buffer.atoms.positions[:, -1]) # Get top Z pisition
 	solvated_polymer.atoms.positions += np.array([0.0, 0.0, buffer_max_z + 0.2]) # displace mixture with a safety buffer
