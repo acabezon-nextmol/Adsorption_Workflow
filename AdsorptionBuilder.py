@@ -29,8 +29,6 @@ import glob
 import sys
 import datetime
 from scipy.constants import Avogadro
-from polymer_insertion import insert_polymer, generate_polymer_layer_zshift
-from polymer_insertion_2 import insert_polymer_2
 from typing import Tuple, List, Dict
 import logging
 
