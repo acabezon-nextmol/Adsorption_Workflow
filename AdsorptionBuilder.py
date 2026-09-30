@@ -576,21 +576,13 @@ def build_system(surface : mda.core.universe.Universe, polymer_gro : str, polyme
 	if W is None or P is None:
 		W, P = determine_system_composition(x, y, z_mix, polymer_mass)
 
-	cmd = [
-		gmx_bin, "editconf",
-		"-bt", "cubic",
-		"-box",  str(x/10), str(y/10), str(z_mix/10),
-		"-o", "empty_box.gro"
-	]
-	empty_box = run_gmx(cmd)
-
 	cmd = [ # Write gmx command                                             
 			gmx_bin, "insert-molecules",                                    
-			"-f", "empty_box.gro",                                              
+			"-box",  str(x/10), str(y/10), str(z_mix/10),
 			"-ci", polymer_gro,                                             
 			"-nmol", str(P),                                                
 			"-rot", "z",                                                    
-			"-o", "tmp_2.gro",                                              
+			"-o", "polymers.gro",                                              
 			"-try", "20000000",
 			"-radius", "0.15"                                            
 	]
@@ -863,5 +855,4 @@ if __name__ == "__main__":
 	main()
 	for f in glob.glob("tmp*gro"):
 		os.remove(f)
-	os.remove("walls.gro")
 	os.remove("polymers.gro")
